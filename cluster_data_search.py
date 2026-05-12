@@ -15,10 +15,18 @@ Inputs:
 - Optional CSV mapping file next to this script: cluster_id_map.csv
     * maps custom keys (e.g., obsids) and short tokens (e.g., RMJ0003) to a canonical name
 
-Outputs (in --outdir):
-- <tag>_general_summary.json
-- <tag>_alt_names.txt
-- <tag>_publications.txt (bibcodes or reference IDs best-effort)
+Outputs (in --outdir/<tag>/):
+- general_summary.json
+- alt_names.txt
+- alt_names_cleaned.txt
+- publications.txt (raw bibcode list)
+- publications_bibcodes.json
+- publications_resolved.json (full ADS metadata, if ADS_API_TOKEN set)
+- publications_filtered.json (subset matching cluster alt-name tokens; bib-manager's import queue)
+
+--outdir defaults to ~/Documents/Claude/Research/Clusters/_data/, so a fresh
+run lands in Research/Clusters/_data/<cluster>/ for the bib-manager pipeline
+to consume directly.
 
 Dependencies:
 - astropy, astroquery, pandas, numpy
@@ -64,7 +72,7 @@ from astroquery.ipac.ned import Ned
 # ------------------------------------
 
 DEFAULT_MAP_FILENAME = "cluster_id_map.csv"
-DEFAULT_OUTDIR = "./../cluster_data_search_output"
+DEFAULT_OUTDIR = "~/Documents/Claude/Research/Clusters/_data"
 
 DEFAULT_SEED_RADII_ARCSEC = [30, 60, 120] 
 DEFAULT_SIMBAD_CLUSTER_OTYPES = [
@@ -1863,6 +1871,11 @@ def main(argv: list[str]) -> int:
         input_coord = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame="icrs")
         tag = safe_stem(f"RA{ra:.5f}_DEC{dec:.5f}")
 
+    # Per-cluster subdir under --outdir (which is the cluster-data root, not
+    # a flat dump). The tag becomes the cluster directory name, so filenames
+    # below are de-prefixed.
+    cluster_outdir = ensure_outdir(outdir / tag)
+
     summary = run_general_search(
         mapped_name=mapped_name,
         input_coord=input_coord,
@@ -1876,7 +1889,7 @@ def main(argv: list[str]) -> int:
     pub_tokens = build_pub_search_tokens(alt_names_cleaned, mapped_name=mapped_name)
 
     write_json(
-        outdir / f"{tag}_publications_bibcodes.json",
+        cluster_outdir / "publications_bibcodes.json",
         [{"bibcode": b} for b in bibcodes],
     )
 
@@ -1886,7 +1899,7 @@ def main(argv: list[str]) -> int:
             pubs_resolved = resolve_bibcodes_ads(bibcodes)
             pubs_resolved_noabs = [{k: v for k, v in p.items() if k != "abstract"} for p in pubs_resolved]
             write_json(
-                outdir / f"{tag}_publications_resolved.json",
+                cluster_outdir / "publications_resolved.json",
                 pubs_resolved_noabs,
             )
             pubs_filtered = [p for p in pubs_resolved if publication_mentions_any_token(p, pub_tokens)]
@@ -1900,7 +1913,7 @@ def main(argv: list[str]) -> int:
                 pubs_filtered_pretty.append(q)
 
             write_json(
-                outdir / f"{tag}_publications_filtered.json",
+                cluster_outdir / "publications_filtered.json",
                 pubs_filtered_pretty,
             )
 
@@ -1911,26 +1924,26 @@ def main(argv: list[str]) -> int:
         summary.notes.append("ADS_API_TOKEN not set; skipping publication metadata resolution.")
 
     payload = asdict(summary)
-    summary_path = outdir / f"{tag}_general_summary.json"
+    summary_path = cluster_outdir / "general_summary.json"
     summary_path.write_text(json.dumps(payload, indent=2))
     logging.info(f"Wrote: {summary_path}")
 
-    alt_path = outdir / f"{tag}_alt_names.txt"
+    alt_path = cluster_outdir / "alt_names.txt"
     alt_path.write_text("\n".join(summary.alt_names) + ("\n" if summary.alt_names else ""))
     logging.info(f"Wrote: {alt_path}")
 
 
     header = build_clean_alias_header(alt_names_cleaned)
-    alt_path = outdir / f"{tag}_alt_names_cleaned.txt"
+    alt_path = cluster_outdir / "alt_names_cleaned.txt"
     with open(alt_path, "w") as f:
         f.write(header)
         for name in alt_names_cleaned:
             f.write(name + "\n")
-    
+
     # alt_path.write_text("\n".join(alt_names_cleaned) + ("\n" if alt_names_cleaned else ""))
     logging.info(f"Wrote: {alt_path}")
 
-    pubs_path = outdir / f"{tag}_publications.txt"
+    pubs_path = cluster_outdir / "publications.txt"
     pubs_path.write_text("\n".join(summary.publications) + ("\n" if summary.publications else ""))
     logging.info(f"Wrote: {pubs_path}")
 

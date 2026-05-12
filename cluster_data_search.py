@@ -1828,6 +1828,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     tgt.add_argument("--name", type=str, help='Cluster name or identifier (e.g., "0881900801", "RMJ_0003", "RMJ121917.6+505432.8").')
     tgt.add_argument("--radec", nargs=2, type=float, metavar=("RA_DEG", "DEC_DEG"), help="ICRS degrees.")
     p.add_argument("--outdir", type=str, default=DEFAULT_OUTDIR, help=f"Output directory. [default: {DEFAULT_OUTDIR}]")
+    p.add_argument(
+        "--tag",
+        type=str,
+        default=None,
+        help=(
+            "Override the per-cluster directory name. By default the tag is "
+            "derived from the resolved cluster name via safe_stem(), which "
+            "produces things like 'MACS_J1149_5+2223'. Use --tag to enforce "
+            "the canonical vault filename (e.g. 'MACS_J1149') so the output "
+            "dir lines up with the cluster MOC."
+        ),
+    )
     p.add_argument("--map-csv", type=str, default=None, help=f"Mapping CSV path. Default is {DEFAULT_MAP_FILENAME} next to this script.")
     p.add_argument("--verbose", action="store_true", help="Enable verbose logging.")
     return p.parse_args(argv)
@@ -1872,6 +1884,12 @@ def main(argv: list[str]) -> int:
         ra, dec = args.radec
         input_coord = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame="icrs")
         tag = safe_stem(f"RA{ra:.5f}_DEC{dec:.5f}")
+
+    # --tag overrides the auto-computed tag so the output directory can
+    # match the cluster's canonical vault filename (e.g. MACS_J1149)
+    # rather than safe_stem's longer expansion (MACS_J1149_5+2223).
+    if args.tag:
+        tag = args.tag
 
     # Per-cluster subdir under --outdir (which is the cluster-data root, not
     # a flat dump). All pub-search outputs land inside a `pub_search/`

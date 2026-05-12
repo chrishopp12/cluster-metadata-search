@@ -15,7 +15,7 @@ Inputs:
 - Optional CSV mapping file next to this script: cluster_id_map.csv
     * maps custom keys (e.g., obsids) and short tokens (e.g., RMJ0003) to a canonical name
 
-Outputs (in --outdir/<tag>/):
+Outputs (in --outdir/<tag>/pub_search/):
 - general_summary.json
 - alt_names.txt
 - alt_names_cleaned.txt
@@ -25,8 +25,10 @@ Outputs (in --outdir/<tag>/):
 - publications_filtered.json (subset matching cluster alt-name tokens; bib-manager's import queue)
 
 --outdir defaults to ~/Documents/Claude/Research/Clusters/_data/, so a fresh
-run lands in Research/Clusters/_data/<cluster>/ for the bib-manager pipeline
-to consume directly.
+run lands in Research/Clusters/_data/<cluster>/pub_search/ — keeping these
+artifacts grouped under one directory rather than mixed with other per-
+cluster data (observations.csv, members.csv, etc.) at the _data/<cluster>/
+root.
 
 Dependencies:
 - astropy, astroquery, pandas, numpy
@@ -1872,9 +1874,11 @@ def main(argv: list[str]) -> int:
         tag = safe_stem(f"RA{ra:.5f}_DEC{dec:.5f}")
 
     # Per-cluster subdir under --outdir (which is the cluster-data root, not
-    # a flat dump). The tag becomes the cluster directory name, so filenames
-    # below are de-prefixed.
-    cluster_outdir = ensure_outdir(outdir / tag)
+    # a flat dump). All pub-search outputs land inside a `pub_search/`
+    # subdirectory of the cluster's _data/ folder so they stay grouped
+    # alongside (but separate from) other cluster artifacts like
+    # observations.csv, members.csv, literature.json.
+    cluster_outdir = ensure_outdir(outdir / tag / "pub_search")
 
     summary = run_general_search(
         mapped_name=mapped_name,

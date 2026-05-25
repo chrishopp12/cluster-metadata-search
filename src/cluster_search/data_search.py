@@ -1434,6 +1434,11 @@ def name_and_publication_search(
 
         out.append(name)
 
+        # Per-item progress log
+        logging.info(
+            f"[{i}/{len(queue)}] querying SIMBAD+NED for {name!r}"
+        )
+
         # Query SIMBAD metadata (reuse existing query)
         if not _skip_backend(name, "simbad"):
             s = simbad_object_metadata(name, notes=notes)

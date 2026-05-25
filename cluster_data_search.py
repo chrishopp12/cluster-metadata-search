@@ -24,11 +24,14 @@ Outputs (in --outdir/<tag>/pub_search/):
 - publications_resolved.json (full ADS metadata, if ADS_API_TOKEN set)
 - publications_filtered.json (subset matching cluster alt-name tokens; bib_manager's import queue)
 
---outdir defaults to ~/Documents/Claude/Research/Clusters/_data/, so a fresh
-run lands in Research/Clusters/_data/<cluster>/pub_search/ — keeping these
-artifacts grouped under one directory rather than mixed with other per-
-cluster data (observations.csv, members.csv, etc.) at the _data/<cluster>/
-root.
+Configuration via environment variables (overridden by CLI flags):
+- CLUSTER_DATA_DIR : output root. Defaults to a sibling ``Clusters`` directory
+  next to this repo's parent directory. Each run lands in
+  <CLUSTER_DATA_DIR>/<cluster>/pub_search/, keeping these artifacts grouped
+  under one directory rather than mixed with other per-cluster data
+  (observations.csv, members.csv, etc.) at the <cluster>/ root.
+- CLUSTER_ID_MAP  : path to the alias-mapping CSV. Defaults to
+  ``cluster_id_map.csv`` in the same sibling ``Clusters`` directory.
 
 Dependencies:
 - astropy, astroquery, pandas, numpy
@@ -73,8 +76,19 @@ from astroquery.ipac.ned import Ned
 # Defaults/ Constants
 # ------------------------------------
 
+# Repo lives at <root>/Code/cluster_search/, with a sibling <root>/Clusters/
+# holding per-cluster directories and the alias-mapping CSV. The script writes
+# into the vault when CLUSTER_DATA_DIR points there; otherwise it falls back to
+# this local sibling so a fresh checkout still has somewhere sensible to land
+# without leaking a personal vault path into the repo.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_DEFAULT_CLUSTERS_DIR = _REPO_ROOT / "Clusters"
+
 DEFAULT_MAP_FILENAME = "cluster_id_map.csv"
-DEFAULT_OUTDIR = "~/Documents/Claude/Research/Clusters/_data"
+DEFAULT_OUTDIR = os.environ.get("CLUSTER_DATA_DIR", str(_DEFAULT_CLUSTERS_DIR))
+DEFAULT_MAP_PATH = os.environ.get(
+    "CLUSTER_ID_MAP", str(_DEFAULT_CLUSTERS_DIR / DEFAULT_MAP_FILENAME)
+)
 
 DEFAULT_SEED_RADII_ARCSEC = [30, 60, 120] 
 DEFAULT_SIMBAD_CLUSTER_OTYPES = [
@@ -554,8 +568,7 @@ def build_clean_alias_header(
         "SDSS": "Sloan Digital Sky Survey object designation.",
         "NSC": "NOAO Source Catalog object naming.",
         "2MASSCL": "2MASS Galaxy Cluster catalog.",
-        "GC2M": "2MASS-based galaxy cluster catalog.",
-        "EXSS": "Extended X-ray Source Survey (ROSAT).",
+        "EXSS": "Extended X-ray Source Survey (Einstein Observatory).",
 
         # IR
         "2MASS": "Two Micron All Sky Survey source catalog.",
@@ -1827,7 +1840,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     tgt = p.add_mutually_exclusive_group(required=True)
     tgt.add_argument("--name", type=str, help='Cluster name or identifier (e.g., "0881900801", "RMJ_0003", "RMJ121917.6+505432.8").')
     tgt.add_argument("--radec", nargs=2, type=float, metavar=("RA_DEG", "DEC_DEG"), help="ICRS degrees.")
-    p.add_argument("--outdir", type=str, default=DEFAULT_OUTDIR, help=f"Output directory. [default: {DEFAULT_OUTDIR}]")
+    p.add_argument(
+        "--outdir",
+        type=str,
+        default=DEFAULT_OUTDIR,
+        help=(
+            "Output directory. Defaults to $CLUSTER_DATA_DIR if set, otherwise "
+            "to the sibling 'Clusters' directory next to this repo. "
+            f"[current default: {DEFAULT_OUTDIR}]"
+        ),
+    )
     p.add_argument(
         "--tag",
         type=str,
@@ -1840,7 +1862,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             "dir lines up with the cluster MOC."
         ),
     )
-    p.add_argument("--map-csv", type=str, default=None, help=f"Mapping CSV path. Default is {DEFAULT_MAP_FILENAME} next to this script.")
+    p.add_argument(
+        "--map-csv",
+        type=str,
+        default=None,
+        help=(
+            "Mapping CSV path. Defaults to $CLUSTER_ID_MAP if set, otherwise "
+            f"to '{DEFAULT_MAP_FILENAME}' in the sibling 'Clusters' directory. "
+            f"[current default: {DEFAULT_MAP_PATH}]"
+        ),
+    )
     p.add_argument("--verbose", action="store_true", help="Enable verbose logging.")
     return p.parse_args(argv)
 
@@ -1855,10 +1886,11 @@ def main(argv: list[str]) -> int:
 
     outdir = ensure_outdir(args.outdir)
 
-    # mapping CSV path next to script by default
-    script_dir = Path(__file__).resolve().parent
-    default_map = script_dir.parent / DEFAULT_MAP_FILENAME
-    map_path = Path(args.map_csv).expanduser().resolve() if args.map_csv else default_map
+    map_path = (
+        Path(args.map_csv).expanduser().resolve()
+        if args.map_csv
+        else Path(DEFAULT_MAP_PATH).expanduser().resolve()
+    )
 
 
     try:

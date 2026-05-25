@@ -79,6 +79,27 @@ Optional: resolving publication metadata via ADS
 
 ---
 
+## Configuration
+
+Two environment variables control where the script reads and writes by
+default. CLI flags (`--outdir`, `--map-csv`) always override.
+
+| Variable           | Purpose                                              | Fallback                                                       |
+| ------------------ | ---------------------------------------------------- | -------------------------------------------------------------- |
+| `CLUSTER_DATA_DIR` | Output root. Each run lands in `<root>/<cluster>/pub_search/`. | Sibling `Clusters/` directory next to this repo's parent dir.  |
+| `CLUSTER_ID_MAP`   | Path to the alias-mapping CSV.                        | `cluster_id_map.csv` in that same sibling `Clusters/` directory. |
+
+Example shell setup:
+
+    export CLUSTER_DATA_DIR=~/path/to/my/cluster_data
+    export CLUSTER_ID_MAP=~/path/to/my/cluster_id_map.csv
+
+Leaving them unset is fine; the fallbacks resolve relative to the script's
+location so a fresh clone has somewhere sensible to write without any
+machine-specific configuration.
+
+---
+
 ## Usage
 
 Resolve by name:
@@ -101,8 +122,9 @@ Use a custom mapping CSV:
 
 ## Mapping CSV (Optional)
 
-If a file named cluster_id_map.csv exists next to the script (or is passed
-explicitly), it will be used to normalize identifiers.
+If a mapping CSV is found at the resolved `CLUSTER_ID_MAP` path (or is
+passed explicitly via `--map-csv`), it will be used to normalize
+identifiers. See the Configuration section above for default resolution.
 
 Required columns (case-insensitive):
 

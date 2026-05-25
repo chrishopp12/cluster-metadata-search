@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cluster-search"
+version = "0.1.0"
+description = "Object-centric SIMBAD/NED/ADS metadata search for galaxy clusters. Produces the pub_search/ bundle consumed by bib_manager."
+requires-python = ">=3.11"
+dependencies = [
+    "astropy>=5.3",
+    "astroquery>=0.4.7",
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "requests",
+]
+
+[project.scripts]
+cluster-data-search = "cluster_search.data_search:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

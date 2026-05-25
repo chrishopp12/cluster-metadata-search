@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-general_data_search.py
+data_search.py
 
 General (object-centric) galaxy cluster data search.
 
@@ -12,7 +12,8 @@ Core idea:
 
 Inputs:
 - --name "..."  OR  --radec RA_deg DEC_deg
-- Optional CSV mapping file next to this script: cluster_id_map.csv
+- Optional CSV mapping file at $CLUSTER_ID_MAP, defaulting to a sibling
+  ``Clusters/cluster_id_map.csv`` next to this repo (see DEFAULT_MAP_PATH).
     * maps custom keys (e.g., obsids) and short tokens (e.g., RMJ0003) to a canonical name
 
 Outputs (in --outdir/<tag>/pub_search/):
@@ -77,11 +78,13 @@ from astroquery.ipac.ned import Ned
 # ------------------------------------
 
 # Repo lives at <root>/Code/cluster_search/, with a sibling <root>/Clusters/
-# holding per-cluster directories and the alias-mapping CSV. The script writes
-# into the vault when CLUSTER_DATA_DIR points there; otherwise it falls back to
-# this local sibling so a fresh checkout still has somewhere sensible to land
-# without leaking a personal vault path into the repo.
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+# holding per-cluster directories and the alias-mapping CSV. This module is at
+# src/cluster_search/data_search.py inside the repo, so parents[4] steps:
+# data_search.py → cluster_search (pkg) → src → cluster_search (repo) → Code →
+# <root>. The script writes into the vault when CLUSTER_DATA_DIR points there;
+# otherwise it falls back to this local sibling so a fresh checkout still has
+# somewhere sensible to land without leaking a personal vault path into the repo.
+_REPO_ROOT = Path(__file__).resolve().parents[4]
 _DEFAULT_CLUSTERS_DIR = _REPO_ROOT / "Clusters"
 
 DEFAULT_MAP_FILENAME = "cluster_id_map.csv"
@@ -1876,8 +1879,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def main(argv: list[str]) -> int:
-    args = parse_args(argv)
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(sys.argv[1:] if argv is None else argv)
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -2027,4 +2030,4 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1:]))
+    raise SystemExit(main())

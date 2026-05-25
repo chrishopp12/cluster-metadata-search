@@ -66,9 +66,13 @@ Create and activate a Python environment (recommended):
     conda create -n cluster_lookup python=3.11
     conda activate cluster_lookup
 
-Install required packages:
+Install editable from this repo:
 
-    pip install numpy pandas astropy astroquery requests
+    pip install -e .
+
+This declares `astropy`, `astroquery`, `pandas`, `numpy`, and `requests` as
+runtime dependencies (see `pyproject.toml`) and registers a
+`cluster-data-search` console script on `PATH`.
 
 Optional: resolving publication metadata via ADS
 
@@ -104,19 +108,21 @@ machine-specific configuration.
 
 Resolve by name:
 
-    python cluster_data_search.py --name "RMJ121917.6+505432.8"
+    cluster-data-search --name "RMJ121917.6+505432.8"
 
 Resolve by coordinates:
 
-    python cluster_data_search.py --radec 184.8235 50.9091
+    cluster-data-search --radec 184.8235 50.9091
 
 Specify output directory:
 
-python cluster_data_search.py --name "RMJ0003" --outdir ./cluster_general_output
+    cluster-data-search --name "RMJ0003" --outdir ./cluster_general_output
 
 Use a custom mapping CSV:
 
-    python cluster_data_search.py --name "0881900801" --map-csv ./cluster_id_map.csv
+    cluster-data-search --name "0881900801" --map-csv ./cluster_id_map.csv
+
+The equivalent module form also works: `python -m cluster_search.data_search ...`.
 
 ---
 

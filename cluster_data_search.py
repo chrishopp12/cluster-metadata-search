@@ -22,7 +22,7 @@ Outputs (in --outdir/<tag>/pub_search/):
 - publications.txt (raw bibcode list)
 - publications_bibcodes.json
 - publications_resolved.json (full ADS metadata, if ADS_API_TOKEN set)
-- publications_filtered.json (subset matching cluster alt-name tokens; bib-manager's import queue)
+- publications_filtered.json (subset matching cluster alt-name tokens; bib_manager's import queue)
 
 --outdir defaults to ~/Documents/Claude/Research/Clusters/_data/, so a fresh
 run lands in Research/Clusters/_data/<cluster>/pub_search/ — keeping these

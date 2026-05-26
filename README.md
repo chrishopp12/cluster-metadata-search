@@ -10,7 +10,7 @@ early-stage lookup or orchestration component in larger cluster analysis pipelin
 
 ---
 
-## Core Design Philosophy
+## Design Philosophy
 
 The tool is object-centric, not region-centric.
 
@@ -18,13 +18,13 @@ Instead of performing wide cone searches that return thousands of member galaxie
 it:
 
 1) Resolves the input (name or coordinates) to one best cluster-like object
-2) Queries SIMBAD and NED about that object only
+2) Queries SIMBAD and NED for metadata about that object
 3) Collects:
    - Coordinates
    - Object type
-   - Redshift estimates
+    - Redshift candidates
    - Alternate names / cross-identifications
-   - Bibliographic references (best-effort)
+    - Bibliographic references
 
 This avoids the “member-galaxy soup” problem and keeps outputs lightweight and
 interpretable.
@@ -54,7 +54,7 @@ interpretable.
     - References
 - Intelligent fallback logic:
   - Name lookup → coordinate seed search → nearest cluster-type object
-- Clean, machine-readable outputs (JSON + text)
+- Clean outputs (JSON + text)
 - Each backend can fail independently; failures are recorded in notes
 
 ---
@@ -62,6 +62,11 @@ interpretable.
 ## Installation
 
 Create and activate a Python environment (recommended):
+
+    python -m venv .venv
+    source .venv/bin/activate
+
+Or with Conda:
 
     conda create -n cluster_lookup python=3.11
     conda activate cluster_lookup
@@ -85,31 +90,20 @@ Optional: resolving publication metadata via ADS
 
 ## Configuration
 
-Two environment variables control where the package reads and writes by
-default. CLI flags (`--outdir`, `--map-csv`) always override.
+Two environment variables control default paths. CLI flags (`--outdir`,
+`--map-csv`) always override.
 
 | Variable           | Purpose                                              | Fallback                                                       |
 | ------------------ | ---------------------------------------------------- | -------------------------------------------------------------- |
-| `CLUSTER_DATA_DIR` | Output root. Each run lands in `<root>/<cluster>/pub_search/`. | Sibling `Clusters/` directory next to this repo's parent dir.  |
-| `CLUSTER_ID_MAP`   | Path to the alias-mapping CSV.                        | `cluster_id_map.csv` in that same sibling `Clusters/` directory. |
+| `CLUSTER_DATA_DIR` | Output root. Each run lands in `<root>/<cluster>/pub_search/`. | `Clusters/` directory near the checked-out repository (see code defaults). |
+| `CLUSTER_ID_MAP`   | Path to the alias-mapping CSV.                        | `cluster_id_map.csv` in that same default `Clusters/` directory. |
 
 Example shell setup:
 
     export CLUSTER_DATA_DIR=~/path/to/my/cluster_data
     export CLUSTER_ID_MAP=~/path/to/my/cluster_id_map.csv
 
-Leaving them unset is fine; the fallbacks resolve relative to the
-installed package's location (via `Path(__file__).resolve().parents[4]`)
-so a fresh clone has somewhere sensible to write without any
-machine-specific configuration.
-
-Chris's setup: the `research` conda env's `activate.d/cluster_data_dir.sh`
-auto-exports `CLUSTER_DATA_DIR` to the Obsidian vault path
-(`~/Documents/Claude/Research/Clusters/_data`) on activation. So inside
-the `research` env, outputs land in the vault automatically — no need to
-set the env var in shell rc. `CLUSTER_ID_MAP` is left unset; the fallback
-resolves to the sibling `Clusters/cluster_id_map.csv` next to the repo,
-which is where Chris's map file lives.
+If you do not set these variables, built-in defaults are used.
 
 ---
 
@@ -130,6 +124,10 @@ Specify output directory:
 Use a custom mapping CSV:
 
     cluster-data-search --name "0881900801" --map-csv ./cluster_id_map.csv
+
+Use a custom output tag:
+
+    cluster-data-search --name "RMJ121917.6+505432.8" --tag RMJ_1219
 
 The equivalent module form also works: `python -m cluster_search.data_search ...`.
 
@@ -174,16 +172,14 @@ For a target with `--tag RMJ_1219`, files land under
             ├── publications.txt              (raw bibcode list)
             ├── publications_bibcodes.json
             ├── publications_resolved.json    (full ADS metadata; only when ADS_API_TOKEN is set)
-            └── publications_filtered.json    (subset whose title/abstract mention this cluster; bib_manager's import queue)
+            └── publications_filtered.json    (subset whose title/abstract mention this cluster)
 
 The `pub_search/` subdirectory keeps these artifacts grouped under one
 directory rather than mixed with other per-cluster data (observations.csv,
 members.csv, etc.) at the `<outdir>/<tag>/` root.
 
 `--tag` overrides the auto-derived directory name. Without `--tag`, the
-name comes from `safe_stem()` applied to the resolved cluster name (e.g.,
-`MACS_J1149_5+2223`); with `--tag MACS_J1149`, it matches the cluster's
-canonical vault filename.
+name comes from `safe_stem()` applied to the resolved cluster name.
 
 Files are only written when meaningful content exists.
 
@@ -217,8 +213,6 @@ This file is designed for downstream automation or ingestion by larger pipelines
 ---
 
 ## Roadmap (Planned, Not Implemented)
-
-
 - Configurable allowed object types
 - Better handling of ambiguous multi-object regions
 - Integration with photometric, redshift, and radio lookup tools

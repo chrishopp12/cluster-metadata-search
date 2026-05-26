@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-general_data_search.py
+data_search.py
 
 General (object-centric) galaxy cluster data search.
 
@@ -12,13 +12,27 @@ Core idea:
 
 Inputs:
 - --name "..."  OR  --radec RA_deg DEC_deg
-- Optional CSV mapping file next to this script: cluster_id_map.csv
+- Optional CSV mapping file at $CLUSTER_ID_MAP, defaulting to a sibling
+  ``Clusters/cluster_id_map.csv`` next to this repo (see DEFAULT_MAP_PATH).
     * maps custom keys (e.g., obsids) and short tokens (e.g., RMJ0003) to a canonical name
 
-Outputs (in --outdir):
-- <tag>_general_summary.json
-- <tag>_alt_names.txt
-- <tag>_publications.txt (bibcodes or reference IDs best-effort)
+Outputs (in --outdir/<tag>/pub_search/):
+- general_summary.json
+- alt_names.txt
+- alt_names_cleaned.txt
+- publications.txt (raw bibcode list)
+- publications_bibcodes.json
+- publications_resolved.json (full ADS metadata, if ADS_API_TOKEN set)
+- publications_filtered.json (subset matching cluster alt-name tokens; bib_manager's import queue)
+
+Configuration via environment variables (overridden by CLI flags):
+- CLUSTER_DATA_DIR : output root. Defaults to a sibling ``Clusters`` directory
+  next to this repo's parent directory. Each run lands in
+  <CLUSTER_DATA_DIR>/<cluster>/pub_search/, keeping these artifacts grouped
+  under one directory rather than mixed with other per-cluster data
+  (observations.csv, members.csv, etc.) at the <cluster>/ root.
+- CLUSTER_ID_MAP  : path to the alias-mapping CSV. Defaults to
+  ``cluster_id_map.csv`` in the same sibling ``Clusters`` directory.
 
 Dependencies:
 - astropy, astroquery, pandas, numpy
@@ -39,6 +53,7 @@ import os
 import time
 import requests
 import unicodedata
+import textwrap
 
 
 from datetime import datetime
@@ -62,8 +77,21 @@ from astroquery.ipac.ned import Ned
 # Defaults/ Constants
 # ------------------------------------
 
+# Repo lives at <root>/Code/cluster_search/, with a sibling <root>/Clusters/
+# holding per-cluster directories and the alias-mapping CSV. This module is at
+# src/cluster_search/data_search.py inside the repo, so parents[4] steps:
+# data_search.py → cluster_search (pkg) → src → cluster_search (repo) → Code →
+# <root>. The script writes into the vault when CLUSTER_DATA_DIR points there;
+# otherwise it falls back to this local sibling so a fresh checkout still has
+# somewhere sensible to land without leaking a personal vault path into the repo.
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+_DEFAULT_CLUSTERS_DIR = _REPO_ROOT / "Clusters"
+
 DEFAULT_MAP_FILENAME = "cluster_id_map.csv"
-DEFAULT_OUTDIR = "./../cluster_data_search_output"
+DEFAULT_OUTDIR = os.environ.get("CLUSTER_DATA_DIR", str(_DEFAULT_CLUSTERS_DIR))
+DEFAULT_MAP_PATH = os.environ.get(
+    "CLUSTER_ID_MAP", str(_DEFAULT_CLUSTERS_DIR / DEFAULT_MAP_FILENAME)
+)
 
 DEFAULT_SEED_RADII_ARCSEC = [30, 60, 120] 
 DEFAULT_SIMBAD_CLUSTER_OTYPES = [
@@ -124,10 +152,10 @@ class GeneralSummary:
     # Data products
     alt_names: list[str]
     cross_ids: dict[str, list[str]]
-    redshifts_by_source: dict[str, float]  # e.g. {"simbad": 0.3214, "ned": 0.322}
+    redshifts_by_source: dict[str, float] 
     redshift_candidates: list[RedshiftCandidate]
 
-    publications: list[str]               # bibcodes or NED ref IDs 
+    publications: list[str]          
     notes: list[str]
 
 
@@ -139,6 +167,12 @@ _WS_RE = re.compile(r"\s+")
 _BRACKET_ANY_RE = re.compile(r"\[([^\]]+)\]")
 _BRACKET_CHUNK_RE = re.compile(r"\[[^\]]+\]")
 _TRAILING_ID_RE = re.compile(r"\s+ID\s*$", re.IGNORECASE)
+_COORD_CORE_RE = re.compile(
+    r"(?:\bJ\s*)?(?P<ra>\d{6}(?:\.\d+)?)\s*(?P<sign>[+\-−–—])\s*(?P<dec>\d{6}(?:\.\d+)?)\b",
+    re.IGNORECASE,
+)
+
+_ABELL_CANON_RE = re.compile(r"^ABELL\s+0*(\d{1,4})([A-Z])?\s*$", re.IGNORECASE)
 
 
 def _to_str(x: object) -> str:
@@ -345,8 +379,6 @@ def normalize_keys(names: list[str]) -> list[str]:
     return [normalize_key(n) for n in names]
 
 
-
-
 def canonicalize_clean_name(raw: str) -> str:
     """
     Convert a cross-ID to a canonical-ish form for deduping.
@@ -369,18 +401,21 @@ def canonicalize_clean_name(raw: str) -> str:
 
     _APPROVED_PREFIXES = {
     # Primary/legacy cluster catalogs
-    "ABELL", "ACO", "ZWCL", "MACS",
+    "ABELL", "ACO", "ZWCL", "MACS", "MCS",
 
     # Optical cluster finders
     "RM", "WHL",
     "MAXBCG", "GMBCG",
-    "CAMIRA", "CODEX", "NSC", "SPIDERS", "DLSCL",
+    "CAMIRA", "CODEX", "NSC", "SPIDERS", "DLSCL","SDSS-C4", "SHELS",
 
     # X-ray cluster catalogs
-    "MCXC", "RXC", "XMMXCS", "XCLASS",
+    "MCXC", "RXC", "XMMXCS", "XCLASS", "BAX", "RXGCC", "EXSS","XCLASS",
 
     # SZ catalogs
-    "PLCKESZ", "PSZ1", "PSZ2", "PSZRX", "ACT-C",
+    "PLCKESZ", "PSZ1", "PSZ2", "PSZRX", "ACT-CL",
+
+    # Survey object identifiers
+    "SDSS", "NSC", "2MASSCL", "GC2M", "1RXS", "RX", "SRGA", "2E", "2XMM", "2XMMI", "2XMMP", "CXOU", "ERASS1", "ERASS",
 
     }
 
@@ -494,49 +529,80 @@ def build_clean_alias_header(
     """
 
     PREFIX_DESCRIPTIONS: dict[str, str] = {
-        # Classic optical catalogs
+        # Classic Canonical Cluster Identifiers
         "ABELL": "Abell galaxy cluster catalog (Abell 1958; Abell, Corwin & Olowin 1989).",
         "ZWCL": "Zwicky cluster catalog (optical clusters).",
         "MACS": "MAssive Cluster Survey (high-mass, mostly X-ray selected clusters).",
+        "MCS": "Massive Cluster Survey naming variant used in some cross-IDs (often alongside MACS).",
 
-        # Optical richness-based cluster catalogs
+        # -- Cluster Catalogs --
+        # Optical/ Red-sequence/ Photometric Cluster Catalogs
         "RM": "redMaPPer cluster catalog (SDSS-based red-sequence cluster finder).",
         "WHL": "Wen-Han-Liu SDSS cluster catalog.",
         "MAXBCG": "MaxBCG SDSS cluster catalog (BCG-based selection).",
         "GMBCG": "Gaussian Mixture Brightest Cluster Galaxy catalog (SDSS).",
         "CAMIRA": "CAMIRA optical cluster finder (Subaru/HSC).",
-        "CODEX": "CODEX X-ray-optical cluster catalog.",
-        "NSC": "NOAO Source Catalog cluster identifications.",
-        "SPIDERS": "SPIDERS (SDSS-IV) spectroscopic cluster identifications.",
-        "SHELS": "Smithsonian Hectospec Lensing Survey cluster catalog.",
+        "NSCS": "Northern Sky Cluster Survey.",
         "DLSCL": "Deep Lens Survey cluster catalog.",
+        "SDSS-C4": "SDSS C4 cluster catalog (clusters identified in SDSS spectroscopy).",
 
-        # X-ray cluster catalogs
-        "MCXC": "Meta-Catalogue of X-ray detected Clusters (combined X-ray catalogs).",
-        "RXC": "REFLEX ROSAT X-ray cluster catalog.",
+        # Spectroscopic Cluster Catalogs
+        "SPIDERS": "SPIDERS (SDSS-IV) spectroscopic cluster identifications.",
+        "SHELS": "Smithsonian Hectospec Lensing Survey (spec/ weak lensing) cluster catalog.",
+
+        # X-ray Cluster Catalogs
+        "MCXC": "Meta-Catalog of X-ray detected Clusters (combined X-ray catalogs).",
+        "RXC": "REFLEX/NORAS ROSAT X-ray cluster catalog.",
+        "RXGCC": "ROSAT Galaxy Cluster Catalogue (RXGCC).",
         "XMMXCS": "XMM Cluster Survey (X-ray selected clusters).",
-        "XCLASS": "X-ray cluster catalog (XMM-based).",
+        "XCLASS": "XMM-Newton Cluster Archive Super Survey, XMM serendipitous cluster catalog.",
+        "CODEX": "CODEX X-ray-optical cluster catalog.",
         "BAX": "BAX (Base de Données Amas de Galaxies X) X-ray cluster database.",
 
-        # SZ cluster catalogs
+        # SZ Cluster Catalogs
         "PLCKESZ": "Planck Early Sunyaev-Zel'dovich (SZ) cluster catalog.",
         "PSZ1": "Planck SZ cluster catalog, first release.",
         "PSZ2": "Planck SZ cluster catalog, second release.",
         "PSZRX": "Planck SZ-X-ray matched cluster catalog.",
-        "ACT-C": "Atacama Cosmology Telescope cluster catalog (SZ-selected).",
+        "ACT-CL": "Atacama Cosmology Telescope cluster catalog (SZ-selected).",
 
-        # Optional extended entries
-        "2MASSCL": "2MASS Galaxy Cluster catalog.",
-        "GC2M": "2MASS-based galaxy cluster catalog.",
-        "EXSS": "Extended X-ray Source Survey (may include clusters).",
-
-        # Object-level cross-ID catalogs (not cluster catalogs per se, but commonly cross-ID'd)
-        "2MASS": "Two Micron All Sky Survey source catalog (object-level).",
-        "WISEA": "WISE All-Sky source catalog (object-level).",
-        "1RXS": "ROSAT All-Sky Survey source catalog (object-level).",
-        "2E": "Einstein Observatory source catalog (object-level).",
+        # -- Survey Object Identifiers --
+        # Optical
         "SDSS": "Sloan Digital Sky Survey object designation.",
+        "NSC": "NOAO Source Catalog object naming.",
+        "2MASSCL": "2MASS Galaxy Cluster catalog.",
+        "EXSS": "Extended X-ray Source Survey (Einstein Observatory).",
+
+        # IR
+        "2MASS": "Two Micron All Sky Survey source catalog.",
+        "WISEA": "WISE All-Sky source catalog.",
+
+        # X-ray
+        "1RXS": "ROSAT All-Sky Survey Bright/Faint Source Catalog",
+        "RX": "ROSAT source catalog.",
+        "SRGA": "SRG/eROSITA All-Sky Survey source naming.",
+        "2E": "Einstein Observatory source catalog.",
+        "2XMM": "XMM-Newton 2XMM source catalog naming.",
+        "2XMMI": "2XMMi (incremental) XMM-Newton source catalog naming.",
+        "2XMMP": "2XMMp (pre-release) XMM-Newton source catalog naming.",
+        "CXOU": "Chandra X-ray Observatory source naming.",
+        "ERASS1": "eROSITA All-Sky Survey DR1 source naming.",
+        "ERASS": "eROSITA All-Sky Survey DR1 source naming.",
+
+        # Radio
+        "NVSS": "NRAO VLA Sky Survey (1.4 GHz) radio source designation.",
+        "FIRST": "Faint Images of the Radio Sky at Twenty cm source designation.",
+        "TGSS": "TIFR GMRT Sky Survey radio source designation.",
+        "VLASS": "VLA Sky Survey source designation.",
+        "SUMSS": "Sydney University Molonglo Sky Survey radio source designation.",
+        "WN": "Westerbork Northern Sky Survey (WENSS) radio source designation.",
+
+        # CMB
         "PLANCK": "Generic Planck designation.",
+
+        # Misc General Identifiers
+        "CLG": "Generic “Cluster of Galaxies” designation used in literature-based cross-IDs.",
+        "SCL": "Supercluster catalog designation, typically from large-scale structure studies.",
     }
 
 
@@ -572,6 +638,83 @@ def build_clean_alias_header(
 
     return "\n".join(lines)
 
+
+def _norm_for_pub_search(text: str) -> str:
+    """Normalize text for substring matching against ADS title/abstract."""
+    s = basic_clean(text)
+    s = s.replace("−", "-").replace("–", "-").replace("—", "-")
+    s = _strip_trailing_id_token(s)
+    return s.casefold()
+
+
+def build_pub_search_tokens(clean_aliases: list[str], mapped_name: str | None = None) -> list[str]:
+    """
+    Build a small token list used to search ADS title/abstract for explicit mention.
+
+    Inputs are expected to be already cleaned/canonicalized (i.e., output of normalize_cross_id()).
+    """
+    tokens: set[str] = set()
+
+    # Include mapped name too (it may be the "nice" name you started with)
+    if mapped_name:
+        mn = _norm_for_pub_search(mapped_name)
+        if mn:
+            tokens.add(mn)
+
+    for name in clean_aliases:
+        if not name:
+            continue
+        n = _norm_for_pub_search(name)
+        if not n:
+            continue
+
+        # Full alias token
+        tokens.add(n)
+
+        # ABELL -> add short "A####" token
+        m_ab = _ABELL_CANON_RE.match(name.strip())
+        if m_ab:
+            num = m_ab.group(1)  # already stripped leading zeros by regex group
+            suff = m_ab.group(2) or ""
+            tokens.add(_norm_for_pub_search(f"A{num}{suff}"))
+            tokens.add(_norm_for_pub_search(f"A{num}"))
+            tokens.add(_norm_for_pub_search(f"ABELL {int(num)}{suff}"))
+            tokens.add(_norm_for_pub_search(f"ABELL {int(num)}"))
+
+        # Coordinate core tokens (for J-style names)
+        for m in _COORD_CORE_RE.finditer(n):
+            ra = m.group("ra")
+            dec = m.group("dec")
+            sign = "-" if m.group("sign") in ["-", "−", "–", "—"] else "+"
+            core = f"{ra}{sign}{dec}"
+
+            # Core as written, and a space-separated variant (shows up in prose sometimes)
+            tokens.add(_norm_for_pub_search(core))
+            tokens.add(_norm_for_pub_search(f"{ra} {dec}"))
+
+            # Optional no-decimal variants (catalog prose sometimes drops decimals)
+            ra0 = ra.split(".")[0]
+            dec0 = dec.split(".")[0]
+            tokens.add(_norm_for_pub_search(f"{ra0}{sign}{dec0}"))
+            tokens.add(_norm_for_pub_search(f"{ra0} {dec0}"))
+
+    # Light prune: drop super-short alphabetic-only tokens
+    out = [t for t in tokens if any(ch.isdigit() for ch in t) or len(t) >= 8]
+    out.sort(key=len, reverse=True)
+    return out
+
+
+def publication_mentions_any_token(pub: dict, tokens: list[str]) -> bool:
+    """
+    Return True if any token appears in title+abstract of an ADS-resolved pub dict.
+    Assumes pub has keys 'title' and optionally 'abstract' (we will request it).
+    """
+    title = pub.get("title") or ""
+    abstract = pub.get("abstract") or ""
+    blob = _norm_for_pub_search(f"{title} {abstract}")
+    if not blob:
+        return False
+    return any(tok in blob for tok in tokens)
 
 
 def choose_preferred_label(candidates: list[str]) -> str:
@@ -634,7 +777,7 @@ def resolve_bibcodes_ads(
         )
 
     if fields is None:
-        fields = ["bibcode", "title", "author", "pub", "year", "doi", "citation_count"]
+        fields = ["bibcode", "title", "abstract", "author", "pub", "year", "doi", "citation_count"]
 
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -674,12 +817,17 @@ def resolve_bibcodes_ads(
         if isinstance(doi, list):
             doi = doi[0] if doi else None
 
+        abstract = doc.get("abstract")
+        if isinstance(abstract, list):
+           abstract = abstract[0] if abstract else None
+
         out.append(
             {
                 "bibcode": doc.get("bibcode", bc),
                 "year": doc.get("year"),
                 "first_author": first_author,
                 "title": title,
+                "abstract": abstract,
                 "pub": doc.get("pub"),
                 "doi": doi,
                 "citation_count": doc.get("citation_count"),
@@ -690,6 +838,18 @@ def resolve_bibcodes_ads(
         time.sleep(sleep_s)
 
     return out
+
+
+def wrap_abstract_lines(text: str | None, *, width: int = 88) -> list[str]:
+    """
+    Wrap an abstract for human-readable JSON output.
+    Returns list-of-lines so the JSON pretty print is actually multi-line.
+    """
+    if not text:
+        return []
+    cleaned = _collapse_whitespace(text)
+    wrapped = textwrap.fill(cleaned, width=width)
+    return wrapped.splitlines()
 
 
 def load_id_map_csv(map_path: Path) -> tuple[dict[str, str], dict[str, str]]:
@@ -1028,7 +1188,6 @@ def search_by_name(
     )
 
 
-
 def simbad_search_by_name(name: str, notes: list[str]) -> TargetObject | None:
     """
     Try SIMBAD object lookup by name. Returns a TargetObject with SIMBAD main_id and coord if successful.
@@ -1054,12 +1213,13 @@ def simbad_search_by_name(name: str, notes: list[str]) -> TargetObject | None:
         notes.append(f'SIMBAD name lookup failed for "{name}": {e}')
         return None
 
+
 def ned_search_by_name(name: str, notes: list[str]) -> TargetObject | None:
     """
     Try NED object lookup by name. Returns a TargetObject with NED Object Name and coord if successful.
     """
     try:
-        Ned.clear_cache()
+        # Ned.clear_cache()
         tab = Ned.query_object(name)
         if tab is None or len(tab) == 0:
             return None
@@ -1144,7 +1304,7 @@ def get_ned_cross_ids(object_name: str, notes: list[str]) -> "astropy.table.Tabl
         The result of the query as an `astropy.table.Table` object.
     """
     try:
-        Ned.clear_cache()
+        # Ned.clear_cache()
         payload = Ned.query_object(object_name, get_query_payload=True)
         payload["of"] = "xml_names"  # NED: "XML VOTable of Main NED Data"
 
@@ -1231,47 +1391,82 @@ def name_and_publication_search(
 
     Uses existing simbad_object_metadata() and ned_object_metadata().
     """
+
+    NED_EXCLUDED_PREFIXES = {"[RRB2014]", "[WHL2012]", "[B2017]", "4U", "3U", "2E", "INTEREF", "XCLASS"}
+    SIMBAD_EXCLUDED_PREFIXES = {"WHL", "RM", "RM J", "4U", "3U", "[GRW2022]", "[WH2015]"}
+
+    # Normalize exclusion keys
+    ned_excl = {normalize_key(p) for p in NED_EXCLUDED_PREFIXES}
+    simbad_excl = {normalize_key(p) for p in SIMBAD_EXCLUDED_PREFIXES}
+
+    def _skip_backend(name: str, backend: str) -> bool:
+        key = normalize_key(name)
+        if not key:
+            return True
+        if backend == "ned":
+            return any(key.startswith(p) for p in ned_excl)
+        elif backend == "simbad":
+            return any(key.startswith(p) for p in simbad_excl)
+        return False
+
     # Seed: preserve current order but drop obvious empties
-    queue = [n for n in alt_names if n and str(n).strip()]
+    queue: list[str] = []
+    seen_keys: set[str] = set()
+    for name in alt_names:
+        name_str = str(name).strip()
+        name_key = normalize_key(name_str)
+        if name_key and name_key not in seen_keys:
+            seen_keys.add(name_key)
+            queue.append(name_str)
+
     out: list[str] = []
     publications: list[str] = []
-    seen_keys: set[str] = set()
 
     i = 0
     while i < len(queue):
-        if len(queue) >= max_total:
+        if len(seen_keys) >= max_total:
             notes.append(f"Cross-ID expansion hit max_total={max_total}; stopping early.")
+            notes.append(f"[debug] max_total trip: key_len={len(seen_keys)} queue_len={len(queue)} out_len={len(out)} i={i}")
             break
 
         name = str(queue[i]).strip()
         i += 1
 
-        key = normalize_key(name)
-        if not key or key in seen_keys:
-            continue
-        seen_keys.add(key)
         out.append(name)
 
+        # Per-item progress log
+        logging.info(
+            f"[{i}/{len(queue)}] querying SIMBAD+NED for {name!r}"
+        )
+
         # Query SIMBAD metadata (reuse existing query)
-        s = simbad_object_metadata(name, notes=notes)
-        for xid in (s.get("ids") or []):
-            xid_s = str(xid).strip()
-            xid_key = normalize_key(xid_s)
-            if xid_key and xid_key not in seen_keys:
-                queue.append(xid_s)
-        if s.get("publications"):
-            publications.extend(list(s["publications"]))
+        if not _skip_backend(name, "simbad"):
+            s = simbad_object_metadata(name, notes=notes)
+            for xid in (s.get("ids") or []):
+                xid_s = str(xid).strip()
+                xid_key = normalize_key(xid_s)
+                if xid_key and xid_key not in seen_keys:
+                    seen_keys.add(xid_key)
+                    queue.append(xid_s)
+            if s.get("publications"):
+                publications.extend(list(s["publications"]))
+        else:
+            notes.append(f'Skipping SIMBAD metadata query for "{name}" due to excluded prefix.')
 
 
         # Query NED metadata (reuse existing query)
-        n = ned_object_metadata(name, notes=notes)
-        for xid in (n.get("names") or []):
-            xid_s = str(xid).strip()
-            xid_key = normalize_key(xid_s)
-            if xid_key and xid_key not in seen_keys:
-                queue.append(xid_s)
-        if n.get("publications"):
-            publications.extend(list(n["publications"]))
+        if not _skip_backend(name, "ned"):
+            n = ned_object_metadata(name, notes=notes)
+            for xid in (n.get("names") or []):
+                xid_s = str(xid).strip()
+                xid_key = normalize_key(xid_s)
+                if xid_key and xid_key not in seen_keys:
+                    seen_keys.add(xid_key)
+                    queue.append(xid_s)
+            if n.get("publications"):
+                publications.extend(list(n["publications"]))
+        else:
+            notes.append(f'Skipping NED metadata query for "{name}" due to excluded prefix.')
 
     return out, publications
 
@@ -1360,7 +1555,7 @@ def ned_object_metadata(target_name: str, notes: list[str]) -> dict[str, Any]:
     Returns dict with keys: coord, names, redshift, redshift_err, publications
     """
     out: dict[str, Any] = {"coord": None, "names": [], "redshift": None, "redshift_err": None, "publications": []}
-    Ned.clear_cache()
+    # Ned.clear_cache()
     # query_object for coord + quick z
     try:
         tab = Ned.query_object(target_name)
@@ -1653,14 +1848,44 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     tgt = p.add_mutually_exclusive_group(required=True)
     tgt.add_argument("--name", type=str, help='Cluster name or identifier (e.g., "0881900801", "RMJ_0003", "RMJ121917.6+505432.8").')
     tgt.add_argument("--radec", nargs=2, type=float, metavar=("RA_DEG", "DEC_DEG"), help="ICRS degrees.")
-    p.add_argument("--outdir", type=str, default=DEFAULT_OUTDIR, help=f"Output directory. [default: {DEFAULT_OUTDIR}]")
-    p.add_argument("--map-csv", type=str, default=None, help=f"Mapping CSV path. Default is {DEFAULT_MAP_FILENAME} next to this script.")
+    p.add_argument(
+        "--outdir",
+        type=str,
+        default=DEFAULT_OUTDIR,
+        help=(
+            "Output directory. Defaults to $CLUSTER_DATA_DIR if set, otherwise "
+            "to the sibling 'Clusters' directory next to this repo. "
+            f"[current default: {DEFAULT_OUTDIR}]"
+        ),
+    )
+    p.add_argument(
+        "--tag",
+        type=str,
+        default=None,
+        help=(
+            "Override the per-cluster directory name. By default the tag is "
+            "derived from the resolved cluster name via safe_stem(), which "
+            "produces things like 'MACS_J1149_5+2223'. Use --tag to enforce "
+            "the canonical vault filename (e.g. 'MACS_J1149') so the output "
+            "dir lines up with the cluster MOC."
+        ),
+    )
+    p.add_argument(
+        "--map-csv",
+        type=str,
+        default=None,
+        help=(
+            "Mapping CSV path. Defaults to $CLUSTER_ID_MAP if set, otherwise "
+            f"to '{DEFAULT_MAP_FILENAME}' in the sibling 'Clusters' directory. "
+            f"[current default: {DEFAULT_MAP_PATH}]"
+        ),
+    )
     p.add_argument("--verbose", action="store_true", help="Enable verbose logging.")
     return p.parse_args(argv)
 
 
-def main(argv: list[str]) -> int:
-    args = parse_args(argv)
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(sys.argv[1:] if argv is None else argv)
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -1669,10 +1894,11 @@ def main(argv: list[str]) -> int:
 
     outdir = ensure_outdir(args.outdir)
 
-    # mapping CSV path next to script by default
-    script_dir = Path(__file__).resolve().parent
-    default_map = script_dir.parent / DEFAULT_MAP_FILENAME
-    map_path = Path(args.map_csv).expanduser().resolve() if args.map_csv else default_map
+    map_path = (
+        Path(args.map_csv).expanduser().resolve()
+        if args.map_csv
+        else Path(DEFAULT_MAP_PATH).expanduser().resolve()
+    )
 
 
     try:
@@ -1699,6 +1925,19 @@ def main(argv: list[str]) -> int:
         input_coord = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame="icrs")
         tag = safe_stem(f"RA{ra:.5f}_DEC{dec:.5f}")
 
+    # --tag overrides the auto-computed tag so the output directory can
+    # match the cluster's canonical vault filename (e.g. MACS_J1149)
+    # rather than safe_stem's longer expansion (MACS_J1149_5+2223).
+    if args.tag:
+        tag = args.tag
+
+    # Per-cluster subdir under --outdir (which is the cluster-data root, not
+    # a flat dump). All pub-search outputs land inside a `pub_search/`
+    # subdirectory of the cluster's _data/ folder so they stay grouped
+    # alongside (but separate from) other cluster artifacts like
+    # observations.csv, members.csv, literature.json.
+    cluster_outdir = ensure_outdir(outdir / tag / "pub_search")
+
     summary = run_general_search(
         mapped_name=mapped_name,
         input_coord=input_coord,
@@ -1709,8 +1948,10 @@ def main(argv: list[str]) -> int:
     bibcodes = dedupe_preserve_order(summary.publications)
     alt_names_cleaned = normalize_cross_id(summary.alt_names)
 
+    pub_tokens = build_pub_search_tokens(alt_names_cleaned, mapped_name=mapped_name)
+
     write_json(
-        outdir / f"{tag}_publications_bibcodes.json",
+        cluster_outdir / "publications_bibcodes.json",
         [{"bibcode": b} for b in bibcodes],
     )
 
@@ -1718,36 +1959,53 @@ def main(argv: list[str]) -> int:
     if os.environ.get("ADS_API_TOKEN"):
         try:
             pubs_resolved = resolve_bibcodes_ads(bibcodes)
+            pubs_resolved_noabs = [{k: v for k, v in p.items() if k != "abstract"} for p in pubs_resolved]
             write_json(
-                outdir / f"{tag}_publications_resolved.json",
-                pubs_resolved,
+                cluster_outdir / "publications_resolved.json",
+                pubs_resolved_noabs,
             )
+            pubs_filtered = [p for p in pubs_resolved if publication_mentions_any_token(p, pub_tokens)]
+
+            pubs_filtered_pretty: list[dict] = []
+            for p in pubs_filtered:
+                q = dict(p)
+                q["abstract_lines"] = wrap_abstract_lines(q.get("abstract"), width=88)
+                # Optional: drop the single-line abstract entirely to avoid duplication
+                q.pop("abstract", None)
+                pubs_filtered_pretty.append(q)
+
+            write_json(
+                cluster_outdir / "publications_filtered.json",
+                pubs_filtered_pretty,
+            )
+
+
         except Exception as e:
             summary.notes.append(f"ADS publication resolution failed: {e}")
     else:
         summary.notes.append("ADS_API_TOKEN not set; skipping publication metadata resolution.")
 
     payload = asdict(summary)
-    summary_path = outdir / f"{tag}_general_summary.json"
+    summary_path = cluster_outdir / "general_summary.json"
     summary_path.write_text(json.dumps(payload, indent=2))
     logging.info(f"Wrote: {summary_path}")
 
-    alt_path = outdir / f"{tag}_alt_names.txt"
+    alt_path = cluster_outdir / "alt_names.txt"
     alt_path.write_text("\n".join(summary.alt_names) + ("\n" if summary.alt_names else ""))
     logging.info(f"Wrote: {alt_path}")
 
 
     header = build_clean_alias_header(alt_names_cleaned)
-    alt_path = outdir / f"{tag}_alt_names_cleaned.txt"
+    alt_path = cluster_outdir / "alt_names_cleaned.txt"
     with open(alt_path, "w") as f:
         f.write(header)
         for name in alt_names_cleaned:
             f.write(name + "\n")
-    
+
     # alt_path.write_text("\n".join(alt_names_cleaned) + ("\n" if alt_names_cleaned else ""))
     logging.info(f"Wrote: {alt_path}")
 
-    pubs_path = outdir / f"{tag}_publications.txt"
+    pubs_path = cluster_outdir / "publications.txt"
     pubs_path.write_text("\n".join(summary.publications) + ("\n" if summary.publications else ""))
     logging.info(f"Wrote: {pubs_path}")
 
@@ -1777,4 +2035,4 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1:]))
+    raise SystemExit(main())

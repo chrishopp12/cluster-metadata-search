@@ -1,9 +1,9 @@
-# Cluster General Data Search
+# cluster-search
 
 A lightweight Python tool to retrieve object-centric metadata for galaxy clusters
 (or cluster candidates) from major public databases, including SIMBAD and NED.
 
-This script is intentionally standalone, minimal, and conservative in scope.
+The package is intentionally standalone, minimal, and conservative in scope.
 It retrieves cluster-level information (coordinates, redshifts, alternate names,
 publications) without returning every galaxy in a field, making it suitable as an
 early-stage lookup or orchestration component in larger cluster analysis pipelines.
@@ -12,7 +12,7 @@ early-stage lookup or orchestration component in larger cluster analysis pipelin
 
 ## Core Design Philosophy
 
-This script is object-centric, not region-centric.
+The tool is object-centric, not region-centric.
 
 Instead of performing wide cone searches that return thousands of member galaxies,
 it:
@@ -66,9 +66,13 @@ Create and activate a Python environment (recommended):
     conda create -n cluster_lookup python=3.11
     conda activate cluster_lookup
 
-Install required packages:
+Install editable from this repo:
 
-    pip install numpy pandas astropy astroquery requests
+    pip install -e .
+
+This declares `astropy`, `astroquery`, `pandas`, `numpy`, and `requests` as
+runtime dependencies (see `pyproject.toml`) and registers a
+`cluster-data-search` console script on `PATH`.
 
 Optional: resolving publication metadata via ADS
 
@@ -79,30 +83,63 @@ Optional: resolving publication metadata via ADS
 
 ---
 
+## Configuration
+
+Two environment variables control where the package reads and writes by
+default. CLI flags (`--outdir`, `--map-csv`) always override.
+
+| Variable           | Purpose                                              | Fallback                                                       |
+| ------------------ | ---------------------------------------------------- | -------------------------------------------------------------- |
+| `CLUSTER_DATA_DIR` | Output root. Each run lands in `<root>/<cluster>/pub_search/`. | Sibling `Clusters/` directory next to this repo's parent dir.  |
+| `CLUSTER_ID_MAP`   | Path to the alias-mapping CSV.                        | `cluster_id_map.csv` in that same sibling `Clusters/` directory. |
+
+Example shell setup:
+
+    export CLUSTER_DATA_DIR=~/path/to/my/cluster_data
+    export CLUSTER_ID_MAP=~/path/to/my/cluster_id_map.csv
+
+Leaving them unset is fine; the fallbacks resolve relative to the
+installed package's location (via `Path(__file__).resolve().parents[4]`)
+so a fresh clone has somewhere sensible to write without any
+machine-specific configuration.
+
+Chris's setup: the `research` conda env's `activate.d/cluster_data_dir.sh`
+auto-exports `CLUSTER_DATA_DIR` to the Obsidian vault path
+(`~/Documents/Claude/Research/Clusters/_data`) on activation. So inside
+the `research` env, outputs land in the vault automatically — no need to
+set the env var in shell rc. `CLUSTER_ID_MAP` is left unset; the fallback
+resolves to the sibling `Clusters/cluster_id_map.csv` next to the repo,
+which is where Chris's map file lives.
+
+---
+
 ## Usage
 
 Resolve by name:
 
-    python cluster_data_search.py --name "RMJ121917.6+505432.8"
+    cluster-data-search --name "RMJ121917.6+505432.8"
 
 Resolve by coordinates:
 
-    python cluster_data_search.py --radec 184.8235 50.9091
+    cluster-data-search --radec 184.8235 50.9091
 
 Specify output directory:
 
-python cluster_data_search.py --name "RMJ0003" --outdir ./cluster_general_output
+    cluster-data-search --name "RMJ0003" --outdir ./cluster_general_output
 
 Use a custom mapping CSV:
 
-    python cluster_data_search.py --name "0881900801" --map-csv ./cluster_id_map.csv
+    cluster-data-search --name "0881900801" --map-csv ./cluster_id_map.csv
+
+The equivalent module form also works: `python -m cluster_search.data_search ...`.
 
 ---
 
 ## Mapping CSV (Optional)
 
-If a file named cluster_id_map.csv exists next to the script (or is passed
-explicitly), it will be used to normalize identifiers.
+If a mapping CSV is found at the resolved `CLUSTER_ID_MAP` path (or is
+passed explicitly via `--map-csv`), it will be used to normalize
+identifiers. See the Configuration section above for default resolution.
 
 Required columns (case-insensitive):
 
@@ -125,14 +162,28 @@ to resolve cleanly to a canonical cluster name.
 
 ## Output Structure
 
-For a target resolved as RMJ121917_6+505432_8, the output directory may contain:
+For a target with `--tag RMJ_1219`, files land under
+`<outdir>/RMJ_1219/pub_search/`:
 
-    cluster_general_output/
-    ├── RMJ121917_6+505432_8_general_summary.json
-    ├── RMJ121917_6+505432_8_alt_names.txt
-    ├── RMJ121917_6+505432_8_publications.txt
-    ├── RMJ121917_6+505432_8_publications_bibcodes.json
-    └── RMJ121917_6+505432_8_publications_resolved.json  (if ADS token set)
+    <outdir>/
+    └── RMJ_1219/
+        └── pub_search/
+            ├── general_summary.json          (machine-readable summary; primary output)
+            ├── alt_names.txt                 (raw alt-name list from SIMBAD + NED)
+            ├── alt_names_cleaned.txt         (canonicalized + deduped, with catalog-prefix descriptions header)
+            ├── publications.txt              (raw bibcode list)
+            ├── publications_bibcodes.json
+            ├── publications_resolved.json    (full ADS metadata; only when ADS_API_TOKEN is set)
+            └── publications_filtered.json    (subset whose title/abstract mention this cluster; bib_manager's import queue)
+
+The `pub_search/` subdirectory keeps these artifacts grouped under one
+directory rather than mixed with other per-cluster data (observations.csv,
+members.csv, etc.) at the `<outdir>/<tag>/` root.
+
+`--tag` overrides the auto-derived directory name. Without `--tag`, the
+name comes from `safe_stem()` applied to the resolved cluster name (e.g.,
+`MACS_J1149_5+2223`); with `--tag MACS_J1149`, it matches the cluster's
+canonical vault filename.
 
 Files are only written when meaningful content exists.
 

@@ -3,6 +3,9 @@
 # -----------------------
 __pycache__/
 *.pyc
+*.egg-info/
+build/
+dist/
 
 # -----------------------
 # OS-specific junk

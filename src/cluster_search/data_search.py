@@ -1219,7 +1219,7 @@ def ned_search_by_name(name: str, notes: list[str]) -> TargetObject | None:
     Try NED object lookup by name. Returns a TargetObject with NED Object Name and coord if successful.
     """
     try:
-        Ned.clear_cache()
+        # Ned.clear_cache()
         tab = Ned.query_object(name)
         if tab is None or len(tab) == 0:
             return None
@@ -1304,7 +1304,7 @@ def get_ned_cross_ids(object_name: str, notes: list[str]) -> "astropy.table.Tabl
         The result of the query as an `astropy.table.Table` object.
     """
     try:
-        Ned.clear_cache()
+        # Ned.clear_cache()
         payload = Ned.query_object(object_name, get_query_payload=True)
         payload["of"] = "xml_names"  # NED: "XML VOTable of Main NED Data"
 
@@ -1555,7 +1555,7 @@ def ned_object_metadata(target_name: str, notes: list[str]) -> dict[str, Any]:
     Returns dict with keys: coord, names, redshift, redshift_err, publications
     """
     out: dict[str, Any] = {"coord": None, "names": [], "redshift": None, "redshift_err": None, "publications": []}
-    Ned.clear_cache()
+    # Ned.clear_cache()
     # query_object for coord + quick z
     try:
         tab = Ned.query_object(target_name)

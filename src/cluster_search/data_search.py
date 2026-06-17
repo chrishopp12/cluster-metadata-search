@@ -28,9 +28,7 @@ Outputs (in --outdir/<tag>/pub_search/):
 Configuration via environment variables (overridden by CLI flags):
 - CLUSTER_DATA_DIR : output root. Defaults to a sibling ``Clusters`` directory
   next to this repo's parent directory. Each run lands in
-  <CLUSTER_DATA_DIR>/<cluster>/pub_search/, keeping these artifacts grouped
-  under one directory rather than mixed with other per-cluster data
-  (observations.csv, members.csv, etc.) at the <cluster>/ root.
+  <CLUSTER_DATA_DIR>/<cluster>/pub_search/
 - CLUSTER_ID_MAP  : path to the alias-mapping CSV. Defaults to
   ``cluster_id_map.csv`` in the same sibling ``Clusters`` directory.
 
@@ -77,13 +75,6 @@ from astroquery.ipac.ned import Ned
 # Defaults/ Constants
 # ------------------------------------
 
-# Repo lives at <root>/Code/cluster_search/, with a sibling <root>/Clusters/
-# holding per-cluster directories and the alias-mapping CSV. This module is at
-# src/cluster_search/data_search.py inside the repo, so parents[4] steps:
-# data_search.py → cluster_search (pkg) → src → cluster_search (repo) → Code →
-# <root>. The script writes into the vault when CLUSTER_DATA_DIR points there;
-# otherwise it falls back to this local sibling so a fresh checkout still has
-# somewhere sensible to land without leaking a personal vault path into the repo.
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _DEFAULT_CLUSTERS_DIR = _REPO_ROOT / "Clusters"
 
@@ -1925,17 +1916,10 @@ def main(argv: list[str] | None = None) -> int:
         input_coord = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame="icrs")
         tag = safe_stem(f"RA{ra:.5f}_DEC{dec:.5f}")
 
-    # --tag overrides the auto-computed tag so the output directory can
-    # match the cluster's canonical vault filename (e.g. MACS_J1149)
-    # rather than safe_stem's longer expansion (MACS_J1149_5+2223).
+    # --tag overrides the auto-computed tag
     if args.tag:
         tag = args.tag
 
-    # Per-cluster subdir under --outdir (which is the cluster-data root, not
-    # a flat dump). All pub-search outputs land inside a `pub_search/`
-    # subdirectory of the cluster's _data/ folder so they stay grouped
-    # alongside (but separate from) other cluster artifacts like
-    # observations.csv, members.csv, literature.json.
     cluster_outdir = ensure_outdir(outdir / tag / "pub_search")
 
     summary = run_general_search(

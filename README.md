@@ -174,9 +174,6 @@ For a target with `--tag RMJ_1219`, files land under
             ├── publications_resolved.json    (full ADS metadata; only when ADS_API_TOKEN is set)
             └── publications_filtered.json    (subset whose title/abstract mention this cluster)
 
-The `pub_search/` subdirectory keeps these artifacts grouped under one
-directory rather than mixed with other per-cluster data (observations.csv,
-members.csv, etc.) at the `<outdir>/<tag>/` root.
 
 `--tag` overrides the auto-derived directory name. Without `--tag`, the
 name comes from `safe_stem()` applied to the resolved cluster name.
@@ -208,14 +205,5 @@ This file is designed for downstream automation or ingestion by larger pipelines
 - Object classification depends on SIMBAD/NED typing
 - Bibliography coverage varies by service
 - No bulk / batch mode yet
-- No attempt to infer cluster membership or extent
-
----
-
-## Roadmap (Planned, Not Implemented)
-- Configurable allowed object types
-- Better handling of ambiguous multi-object regions
-- Integration with photometric, redshift, and radio lookup tools
-- Unified multi-wavelength cluster metadata driver
 
 
